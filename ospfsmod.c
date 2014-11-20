@@ -730,20 +730,94 @@ add_block(ospfs_inode_t *oi)
 	// current number of blocks in file
 	uint32_t n = ospfs_size2nblocks(oi->oi_size);
 
+	if(n==0)
+	  return -EIO;
+	
 	// keep track of allocations to free in case of -ENOSPC
 	uint32_t *allocated[2] = { 0, 0 };
 
-	if(n<OSPFS_NDIRECT)
+	uint32_t *newBlock;
+
+	//if the blocks are in direct block 
+	if((n-1)<OSPFS_NDIRECT)
 	  {
+	    allocated[0] = allocate_block();
+	    //check if there is enough disk space
+	    if(allocated[0] == 0)
+	      return -ENOSPC;
+	    oi->oi_direct[direct_index(n)] = ospfs_block(allocated[0]);
+	    free_block(allocated[0]);
+	    allocated[0] = 0;
+	  }
+	//if the blocks are in singly indirect
+	else if((n-1)>=OSPFS_NDIRECT && (n-1) < OSPFS_NDIRECT + OSPFS_NINDIRECT)
+	  { /*
+	    //see if we have to first allocate the indirect block space
+	    if(oi->indirect == 0)
+	      {
+		allocated[0] = allocate_block();
+		//Check if there is enough disk space
+		if(allocated[0] == 0)
+		  return -ENOSPC;
+		oi->oi_indirect = ospfs_block(allocated[0]);
+	      }
+	    
+	    allocated[1] = allocate_block();
+	    
+	    //check if disk is full
+	    if(allocated[1] == 0)
+	      {
+		if(allocated[0]!=0)
+		  {
+		    free_block(allocated[1]);
+		    allocated[1] = 0;
+		  }
+	      }
+
+	    //uint32_t *newIBlock = (ui32_t *)ospfs_block(oi->oi_indirect);
+	    //newIblock[direct_index(n)] = allocated[1];
+	    if(allocated[0] != 0)
+	      {
+		free_block(allocated[0]);
+		allocated[0] = 0;
+	      }
+
+	    free_block(allocated[1]);
+	    allocated[1] = 0;
+
+	    */
 
 	  }
-	else if(n>=OSPFS_NDIRECT && n < OSPFS_NDIRECT + OSPFS_NINDIRECT)
-	  {
+	//if the blocks are in doubly indirect
+	else if((n-1) >= OSPFS_NDIRECT + OSPFS_NINDIRECT && (n-1) <= OSPFS_MAXFILEBLKS)
+	  { /*
+	    //check if weve allocated inderct2
+	    if(indir_index(n)==0 && direct_index(n)==0)
+	      {
+		allocated[0] = allocate_block();
+		if(allocated[0] == 0)
+		  return -ENOSPC;
+		oi->oi_indirect2 = allocated[0];
+		//allocated[0] = ospfs_block(allocated[0]);
+	      }
+	    //check if we have an inderect block within a doubly indirect block
+	    if(direct_index(n)==0)
+	      {
+		uint32_t inderBlock = allocate_block();
+		if(inderBlock == 0)
+		  {
 
+		  }
+
+		  }*/
+	  }
+	else
+	  {
+	    //errork("Past the maximum number of blocks\n");
 	  }
 
-	/* EXERCISE: Your code here */
-	return -EIO; // Replace this line
+	  oi->oi_size = (n+1)*OSPFS_BLKSIZE;
+	  return 0;
 }
 
 
@@ -892,7 +966,7 @@ ospfs_notify_change(struct dentry *dentry, struct iattr *attr)
 static ssize_t
 ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 {
-	ospfs_inode_t *oi = ospfs_inode(filp->f_dentry->d_inode->i_ino);
+        ospfs_inode_t *oi = ospfs_inode(filp->f_dentry->d_inode->i_ino);
 	int retval = 0;
 	size_t amount = 0;
 
@@ -900,11 +974,19 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 	// Change 'count' so we never read past the end of the file.
 	/* EXERCISE: Your code here */
 
+	if(oi->oi_size < (*f_pos + count))
+	  count = (oi->oi_size - *f_pos);
+
 	// Copy the data to user block by block
 	while (amount < count && retval >= 0) {
 		uint32_t blockno = ospfs_inode_blockno(oi, *f_pos);
 		uint32_t n;
 		char *data;
+		char *data_offset;
+		uint32_t block_byte_offset;
+		uint32_t bytes_to_read; 
+		
+	
 
 		// ospfs_inode_blockno returns 0 on error
 		if (blockno == 0) {
@@ -912,15 +994,29 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 			goto done;
 		}
 
-		data = ospfs_block(blockno);
-
+		data = ospfs_block(blockno); //get starting address of current
+		                             //block
+		data_offset = ospfs_inode_data(oi, *f_pos);
+		block_byte_offset = (uint32_t)data_offset - (uint32_t)data;
+		
+		if(block_byte_offset + (count-amount) >= OSPFS_BLKSIZE)
+     		    bytes_to_read = OSPFS_BLKSIZE - block_byte_offset;
+		else
+		  bytes_to_read = count-amount;
+		
 		// Figure out how much data is left in this block to read.
 		// Copy data into user space. Return -EFAULT if unable to write
 		// into user space.
 		// Use variable 'n' to track number of bytes moved.
 		/* EXERCISE: Your code here */
-		retval = -EIO; // Replace these lines
-		goto done;
+		
+		if(copy_to_user(buffer, data + block_byte_offset, bytes_to_read))
+		  {
+		    retval = -EFAULT;
+		    goto done;
+		  }
+		else
+		  n = bytes_to_read;
 
 		buffer += n;
 		amount += n;
